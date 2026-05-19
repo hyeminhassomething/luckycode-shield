@@ -11,7 +11,7 @@ import pandas as pd
 BASELINE_FAKE_RATE = 0.1322   # 전체 YelpZip 608K
 BASELINE_50K = 0.1079         # 50K Top 200
 
-# 시그너처 임계값
+# 시그니처 임계값
 SIG1_THRESHOLD_LIFT = 1.81    # 23.98% / 13.22%
 SIG2_THRESHOLD_RATIO = 0.20
 SIG3_THRESHOLD_USERS = 5
@@ -200,7 +200,7 @@ def generate_tsne_data():
 
 
 # ============================================
-# 작업장 사용자 47명 (시그너처 3)
+# 작업장 사용자 47명 (시그니처 3)
 # ============================================
 def generate_suspect_users():
     np.random.seed(42)
@@ -244,9 +244,9 @@ def generate_activity_feed():
     return [
         '04:00 KST · Brand_D Trust Score 89 → 67 · 🚨 Alert · 검토 큐 생성 (47건)',
         '03:45 KST · Brand_C 분석 완료 · Trust 91 (안정)',
-        '03:30 KST · Brand_E 신규 리뷰 12개 처리 · 3개 시그너처 정상',
+        '03:30 KST · Brand_E 신규 리뷰 12개 처리 · 3개 시그니처 정상',
         '03:15 KST · Workshop B 패턴 식별 · 작업장 사용자 12명 클러스터링',
-        '03:00 KST · Brand_M 시그너처 1 lift 0.42× (정상 범위)',
+        '03:00 KST · Brand_M 시그니처 1 lift 0.42× (정상 범위)',
         '02:45 KST · co_burst 엣지 47개 추가 → user_co_burst 70,579개',
         '02:30 KST · Brand_F z-score 분포 일일 갱신',
         '02:15 KST · HeteroSAGE 모델 일일 재학습 완료',

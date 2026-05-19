@@ -1,6 +1,6 @@
 """
 🔍 어뷰징 확정 브랜드 상세 인사이트 (컴팩트 ver — 한 화면 fit).
-시그너처 3개 수치 + 도메인 전문가 검증 필요성 만 표시.
+시그니처 3개 수치 + 도메인 전문가 검증 필요성 만 표시.
 """
 import streamlit as st
 
@@ -10,12 +10,12 @@ KUSI_DELI_DEEP_INSIGHT = {
     'school': '경희대학교',
     'category': '프리미엄 HMR',
     'final_trust': 48,
-    'tagline': '3개 시그너처 모두 임계값 초과 + HMR 도메인 리스크 3종',
+    'tagline': '3개 시그니처 모두 임계값 초과 + HMR 도메인 리스크 3종',
 
     'signature_metrics': [
         {
             'icon': '🕐',
-            'name': '시그너처 1 · 시간 차원',
+            'name': '시그니처 1 · 시간 차원',
             'value': '2.04×',
             'threshold': '1.81×',
             'detail': '첫 90일 + 5점 비율 lift 2.04배. baseline 13.22% 대비 27.0% (3.2배 농축).',
@@ -23,7 +23,7 @@ KUSI_DELI_DEEP_INSIGHT = {
         },
         {
             'icon': '⭐',
-            'name': '시그너처 2 · 별점 차원',
+            'name': '시그니처 2 · 별점 차원',
             'value': '26%',
             'threshold': '20%',
             'detail': 'z>+1 + 5점 비율 26.0%. 정상 분포 대비 3.25배. rating_extreme_promoter 엣지 28개.',
@@ -31,7 +31,7 @@ KUSI_DELI_DEEP_INSIGHT = {
         },
         {
             'icon': '👥',
-            'name': '시그너처 3 · 사용자 차원',
+            'name': '시그니처 3 · 사용자 차원',
             'value': '12명',
             'threshold': '5명',
             'detail': '동시 활동 작업장 사용자 12명 식별. co_burst 엣지 47개 (Workshop B 패턴).',
@@ -82,7 +82,7 @@ KH_KITCHEN_DEEP_INSIGHT = {
         {
             'title': '한국 리뷰 조작 산업 연결성',
             'detail': '머니투데이(2025.12): 리뷰 1건당 5,000~7,000원 거래. '
-                      'Workshop B 12명 패턴이 전형적 대행사 시그너처와 일치.',
+                      'Workshop B 12명 패턴이 전형적 대행사 시그니처와 일치.',
         },
     ],
 }
@@ -95,7 +95,7 @@ DEEP_INSIGHT_DATA = {
 
 
 def render_deep_insight_modal(brand_data):
-    """상세 인사이트 — 한 화면 fit (시그너처 + 도메인 만)."""
+    """상세 인사이트 — 한 화면 fit (시그니처 + 도메인 만)."""
     di = brand_data
 
     # 헤더 — 발표용 가독성 (브랜드 이름 크게)
@@ -122,9 +122,9 @@ box-shadow:0 0 24px rgba(255,59,48,0.30);'>
 </div>
 """, unsafe_allow_html=True)
 
-    # ====== 시그너처 3개 ======
+    # ====== 시그니처 3개 ======
     st.markdown("""<div style='color:#FFFFFF;font-size:16px;font-weight:800;margin:4px 0 6px 0;letter-spacing:-0.3px;'>
-📊 시그너처 3개 정량 임계값 초과
+📊 시그니처 3개 정량 임계값 초과
 </div>""", unsafe_allow_html=True)
     cols = st.columns(3)
     for ax, m in zip(cols, di['signature_metrics']):
@@ -172,7 +172,7 @@ box-shadow:0 0 24px rgba(255,59,48,0.30);'>
 <div style='background:linear-gradient(90deg,rgba(255,59,48,0.12),rgba(255,215,0,0.10));
 border:2px solid #FF3B30;border-radius:8px;padding:12px 16px;margin-top:10px;'>
 <div style='color:#FFFFFF;font-size:14px;font-weight:700;line-height:1.6;'>
-💡 본 모델의 자동 탈락 권고는 <b style='color:#FF3B30;'>정량 시그너처 3개 임계값 초과</b> +
+💡 본 모델의 자동 탈락 권고는 <b style='color:#FF3B30;'>정량 시그니처 3개 임계값 초과</b> +
 <b style='color:#FF8C00;'>식품 도메인 리스크 3종</b> 에 근거.
 최종 투자 결정은 <b style='color:#FFD700;'>CJ 인베스트먼트 심사역(사람)</b> 이 도메인 전문가 검증 후 확정.
 </div>

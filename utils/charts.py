@@ -47,7 +47,7 @@ def make_trust_gauge(value, max_value=100):
 
 
 def make_sig1_chart(ts_data, threshold=1.81):
-    """시그너처 1: 첫 90일 + 5점 lift 시계열."""
+    """시그니처 1: 첫 90일 + 5점 lift 시계열."""
     days = ts_data['days']
     sig1 = ts_data['sig1']
 
@@ -113,7 +113,7 @@ def make_sig1_chart(ts_data, threshold=1.81):
 
 
 def make_sig2_chart(ts_data):
-    """시그너처 2: z 분포 + edge count 막대 (subplot 2개)."""
+    """시그니처 2: z 분포 + edge count 막대 (subplot 2개)."""
     fig = make_subplots(rows=2, cols=1, row_heights=[0.55, 0.45],
                         subplot_titles=('<b>z-score 분포 — 정상 vs Day 45</b>',
                                        '<b>rating_extreme_promoter 엣지 추이</b>'),
@@ -194,7 +194,7 @@ def make_sig2_chart(ts_data):
 
 
 def make_sig3_chart(suspect_users):
-    """시그너처 3: 작업장 사용자 산점도."""
+    """시그니처 3: 작업장 사용자 산점도."""
     np.random.seed(123)
     # 정상 사용자 배경
     bg_x = np.random.uniform(-0.5, 2.0, 50)

@@ -20,7 +20,7 @@ BRANDS_DEF = [
         'final_trust': 42,
         'description': '강남권 캐주얼 다이닝 신규 매장 · Day 30 작업장 동원 의혹',
         'insight_title': '🚨 어뷰징 확정 — 투자 부적합',
-        'insight_detail': '시그너처 3개 모두 임계값 초과. Workshop B 12명 패턴 검출. 첫 90일+5점 lift 2.06× (임계 1.81×). co_burst 엣지 47개.',
+        'insight_detail': '시그니처 3개 모두 임계값 초과. Workshop B 12명 패턴 검출. 첫 90일+5점 lift 2.06× (임계 1.81×). co_burst 엣지 47개.',
         'invest_strategy': '❌ 투자 부적합 (브랜드 신뢰도 회복 후 7기 재신청 권장)',
     },
     {
@@ -42,7 +42,7 @@ BRANDS_DEF = [
         'category': '디저트 카페',
         'tier': 'danger',
         'final_trust': 58,
-        'description': '디저트 카페 신생 · 시그너처 2 경계선 진입',
+        'description': '디저트 카페 신생 · 시그니처 2 경계선 진입',
         'insight_title': '⚠️ 위험 — 추가 검증 필요',
         'insight_detail': 'z-score 분포 비대칭 관찰. 작업장 패턴은 미확인이나 의심 사용자 7명 발견. lift 1.45×.',
         'invest_strategy': '⚠️ 보류 (Day 120까지 추가 모니터링 후 재평가)',
@@ -66,7 +66,7 @@ BRANDS_DEF = [
         'final_trust': 65,
         'description': '비건 레스토랑 · 텍스트 패턴 이상',
         'insight_title': '⚠️ 위험 — 추가 검증 필요',
-        'insight_detail': '리뷰 텍스트 평균 길이 220자 (정상 매장 380자 대비 짧음). Promoter 텍스트 시그너처 일부 일치.',
+        'insight_detail': '리뷰 텍스트 평균 길이 220자 (정상 매장 380자 대비 짧음). Promoter 텍스트 시그니처 일부 일치.',
         'invest_strategy': '⚠️ 단계적 투자 (1차 3억 → 검증 후 2차)',
     },
 
@@ -79,7 +79,7 @@ BRANDS_DEF = [
         'final_trust': 74,
         'description': 'AI 영양 분석 식품 큐레이션 · 일관된 자연 리뷰',
         'insight_title': '🟡 모니터링 — 양호',
-        'insight_detail': '시그너처 임계값 미달. 사용자 다양성 양호. 초기 마케팅 활동 자연스러움.',
+        'insight_detail': '시그니처 임계값 미달. 사용자 다양성 양호. 초기 마케팅 활동 자연스러움.',
         'invest_strategy': '🟢 정상 투자 진행 (Day 120 재검토)',
     },
     {
@@ -125,7 +125,7 @@ BRANDS_DEF = [
         'final_trust': 94,
         'description': '글로벌 시장 식품 큐레이션 · ROI 최우수',
         'insight_title': '⭐ 최우수 — 우선 투자 대상',
-        'insight_detail': '시그너처 3개 모두 정상 분포. 사용자 다양성 최고 (Real 클러스터 견고). 첫 90일 매출 증가율 178%.',
+        'insight_detail': '시그니처 3개 모두 정상 분포. 사용자 다양성 최고 (Real 클러스터 견고). 첫 90일 매출 증가율 178%.',
         'invest_strategy': '🌟 최대 투자 (13억) + 글로벌 시장 진출 지원',
     },
     {
@@ -136,7 +136,7 @@ BRANDS_DEF = [
         'final_trust': 92,
         'description': '프리미엄 셰프 다이닝 · 강력한 충성 고객',
         'insight_title': '⭐ 최우수 — 우선 투자 대상',
-        'insight_detail': '재구매율 68% (업계 평균 22%). 가짜 리뷰 시그너처 전무. SNS 자연 확산 패턴.',
+        'insight_detail': '재구매율 68% (업계 평균 22%). 가짜 리뷰 시그니처 전무. SNS 자연 확산 패턴.',
         'invest_strategy': '🌟 최대 투자 (13억) + B2B 유통망 연결',
     },
     {
@@ -160,7 +160,7 @@ BRANDS_DEF = [
         'final_trust': 88,
         'description': '신생 브런치 카페 · 안정적 성장',
         'insight_title': '🟢 정상 — 통상 투자',
-        'insight_detail': '시그너처 모두 정상. 일반 매장 패턴 일치. Day 60부터 자연 증가세.',
+        'insight_detail': '시그니처 모두 정상. 일반 매장 패턴 일치. Day 60부터 자연 증가세.',
         'invest_strategy': '🟢 통상 투자 (7억) + 마케팅 지원',
     },
     {
@@ -171,7 +171,7 @@ BRANDS_DEF = [
         'final_trust': 85,
         'description': '글로벌 요리 신생 · 외국인 타겟',
         'insight_title': '🟢 정상 — 통상 투자',
-        'insight_detail': '외국인 사용자 비율 35% (자연 다양성). 어뷰징 시그너처 없음.',
+        'insight_detail': '외국인 사용자 비율 35% (자연 다양성). 어뷰징 시그니처 없음.',
         'invest_strategy': '🟢 통상 투자 (5억) + 글로벌 PR',
     },
     {
@@ -189,7 +189,7 @@ BRANDS_DEF = [
 
 
 def generate_brands_v2():
-    """15개 브랜드 + Day 시계열 trust score + 시그너처 추이."""
+    """15개 브랜드 + Day 시계열 trust score + 시그니처 추이."""
     np.random.seed(42)
     brands = []
 
