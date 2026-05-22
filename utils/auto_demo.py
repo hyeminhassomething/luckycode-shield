@@ -373,7 +373,8 @@ def _render_grid(groups):
             if not members:
                 st.markdown("<div class='empty-slot'>— 해당 없음 —</div>", unsafe_allow_html=True)
             else:
-                max_show = 5 if key in ('normal', 'monitoring') else 3
+                # GNN 그래프 공간 확보 위해 카드 수 축소: 정상/모니터링 3, 위험/어뷰징 2
+                max_show = 3 if key in ('normal', 'monitoring') else 2
                 for item in members[:max_show]:
                     highlight = (key == 'abuse')
                     st.markdown(render_card_compact(item['brand'], item['state'],
@@ -385,42 +386,496 @@ def _render_grid(groups):
 
 
 def _render_signature_timeline(brands, day):
-    abuse_b = next(b for b in brands if b['tier'] == 'abuse_confirmed')
-    danger_b = next(b for b in brands if b['tier'] == 'danger')
-    top_b = next(b for b in brands if b['tier'] == 'top_roi')
+    """GNN 추론 그래프 시각화 — Heterogeneous Force-directed Network (50K 실측 기반).
 
-    fig = make_subplots(rows=1, cols=3,
-                        subplot_titles=('🕐 S1 lift', '⭐ S2 z>+1 %', '👥 S3 작업장'),
-                        horizontal_spacing=0.06)
-    days_shown = [m for m in MILESTONES if m <= day] or [1]
-    for b, color, name in [(abuse_b, '#FF3B30', abuse_b['name']),
-                            (danger_b, '#FF8C00', danger_b['name']),
-                            (top_b, '#34C759', top_b['name'])]:
-        s1 = [b['sig1_series'][d] for d in days_shown]
-        s2 = [b['sig2_series'][d]*100 for d in days_shown]
-        s3 = [b['sig3_series'][d] for d in days_shown]
-        for col_i, vals in enumerate([s1, s2, s3], 1):
-            fig.add_trace(go.Scatter(x=days_shown, y=vals, mode='lines+markers',
-                                    line=dict(color=color, width=2, shape='spline'),
-                                    marker=dict(size=6),
-                                    name=name, legendgroup=name,
-                                    showlegend=(col_i == 1)),
-                         row=1, col=col_i)
-    fig.add_hline(y=1.81, line_dash='dash', line_color='#FF3B30', line_width=1, row=1, col=1)
-    fig.add_hline(y=20, line_dash='dash', line_color='#FF3B30', line_width=1, row=1, col=2)
-    fig.add_hline(y=5, line_dash='dash', line_color='#FF3B30', line_width=1, row=1, col=3)
+    실제 unified_analysis_50k.py 결과 기반:
+      - 노드: user=37,481 / review=50,000 / product=200
+      - 기본골격 엣지(2): writes=50K, targets=50K
+      - 커스텀 시그니처 엣지(4): rating_extreme_promoter=3,332,
+        rating_extreme_terrorist=334, text_extreme=351, user_co_burst=70,532
+    HeteroSAGE 가 학습한 임베딩 공간을 2D 로 투영했을 때의 community structure 를
+    재현 — 클러스터를 이루는 노드들과 어디에도 속하지 않는 outlier 노드들이 공존.
+    """
+    import numpy as np
+    abuse_b = next(b for b in brands if b['tier'] == 'abuse_confirmed')
+    rng = np.random.default_rng(42)
+    fig = go.Figure()
+
+    # === 0) 엣지 컬러 팔레트 — 2 base + 4 custom ===
+    # 시각적 hierarchy:
+    #   기본 골격 (base) → 얇고 muted 한 backbone, 차가운 회색-청색 톤
+    #   커스텀 시그니처 (custom) → 두껍고 saturate 한 vivid 톤 + 클러스터 강조
+    EDGE_COLORS = {
+        # 기본 골격 (2) — backbone 느낌
+        'writes':                    'rgba(170,185,210,{a})',   # 차분한 silver-gray
+        'targets':                   'rgba(120,170,220,{a})',   # 차분한 light blue
+        # 커스텀 시그니처 (4) — vivid pop
+        'rating_extreme_promoter':   'rgba(255,59,48,{a})',     # 빨강
+        'rating_extreme_terrorist':  'rgba(255,200,0,{a})',     # 형광 노랑
+        'text_extreme':              'rgba(210,110,255,{a})',   # 형광 보라
+        'user_co_burst':             'rgba(255,60,170,{a})',    # 핫핑크 마젠타
+    }
+    # 엣지 width hierarchy
+    BASE_W = 0.35       # 기본 골격: 매우 얇게
+    CUSTOM_W = 1.05     # 커스텀: 약 3배 두껍게 → 눈에 띄게
+
+    # === 1) 클러스터 정의 ===
+    # Day 진행에 따라 어뷰징 클러스터 노드 수 증가
+    day_factor = min(1.0, max(0.0, (day - 14) / 70.0))  # 0.0(Day≤14) → 1.0(Day≥84)
+    abuse_user_n = int(70 + 110 * day_factor) if day >= 30 else int(15 + 25 * day_factor)
+    abuse_rev_n = int(70 + 130 * day_factor) if day >= 30 else int(20 + 30 * day_factor)
+
+    # 클러스터 — 7개 군집 (가로 2 row × 3-4 col).
+    # 노드 색: 2 base node type 색계 (user=녹/마젠타, product=주황) + 4 review 시그니처 색 (정상/Promoter/Terrorist/Text_extreme)
+    # 클러스터 — 실제 t-SNE/UMAP 임베딩 투영처럼 organic overlap, off-grid.
+    # rx/ry 로 타원 클러스터, 일부 클러스터는 다른 클러스터에 embed/bleed 됨.
+    clusters = [
+        # === 정상 도메인 (상단 — 일부 겹침) ===
+        # 정상 사용자 ↔ 정상 리뷰: writes 엣지로 강하게 묶여 cluster boundary 가 흐릿
+        dict(cx=-3.6, cy=1.55, rx=1.55, ry=1.30, n=130, color='#34C759',
+             edge=EDGE_COLORS['writes'].format(a=0.20), name='정상 사용자',
+             size=6, role='user_normal', edge_kind='base'),
+        dict(cx=-0.5, cy=1.35, rx=1.85, ry=1.55, n=160, color='#5DADE2',
+             edge=EDGE_COLORS['writes'].format(a=0.20), name='정상 리뷰',
+             size=5, role='review_normal', edge_kind='base'),
+        # Text-extreme 은 정상 리뷰 상단에 박혀있음 (review subtype)
+        dict(cx=0.9, cy=2.45, rx=0.75, ry=0.60, n=42, color='#BF5AF2',
+             edge=EDGE_COLORS['text_extreme'].format(a=0.60),
+             name='Text-extreme 리뷰', size=5,
+             role='review_text_ext', edge_kind='custom'),
+        # 타 카테고리 사용자 — 정상 리뷰의 우상단에 살짝 겹침
+        dict(cx=2.6, cy=1.65, rx=1.40, ry=1.15, n=90, color='#7FCBC4',
+             edge=EDGE_COLORS['writes'].format(a=0.18), name='타 카테고리 사용자',
+             size=5, role='user_other', edge_kind='base'),
+        # Terrorist — 정상-우측 경계의 다리 위치 (review_normal-product 사이)
+        dict(cx=3.0, cy=0.05, rx=0.85, ry=0.70, n=38, color='#FFB800',
+             edge=EDGE_COLORS['rating_extreme_terrorist'].format(a=0.60),
+             name='Terrorist 리뷰 (z≤-1, ⭐1)',
+             size=6, role='review_terrorist', edge_kind='custom'),
+        # Product hub — 우측 (review 가 모이는 곳)
+        dict(cx=4.8, cy=0.55, rx=0.85, ry=0.75, n=32, color='#FF8C00',
+             edge=EDGE_COLORS['targets'].format(a=0.35), name='식당 (Product)',
+             size=10, role='product', edge_kind='base'),
+        # === 어뷰징 도메인 (하단 — 강한 overlap) ===
+        # Workshop B 사용자 ↔ Promoter 리뷰: co_burst + writes 로 엉켜있음
+        dict(cx=-3.8, cy=-1.55, rx=1.55, ry=1.30, n=abuse_user_n, color='#A23B72',
+             edge=EDGE_COLORS['user_co_burst'].format(a=0.55),
+             name='Workshop B 사용자 (의심)',
+             size=7, role='user_abuse', edge_kind='custom'),
+        dict(cx=-0.4, cy=-1.75, rx=2.00, ry=1.55, n=abuse_rev_n, color='#FF3B30',
+             edge=EDGE_COLORS['rating_extreme_promoter'].format(a=0.55),
+             name='Promoter 리뷰 (z≥+1, ⭐5)',
+             size=6, role='review_promoter', edge_kind='custom'),
+    ]
+
+    # === 2) 노드 좌표 생성 (각 클러스터 내부 — 가우시안 + 타원 분포) ===
+    all_pos = {}  # role -> list[(x,y)]
+    for c in clusters:
+        pts = []
+        # 살짝 회전된 타원 (organic feel)
+        rot = rng.uniform(-0.25, 0.25)
+        cr, sr = np.cos(rot), np.sin(rot)
+        for _ in range(c['n']):
+            theta = rng.uniform(0, 2 * np.pi)
+            rad = np.sqrt(rng.uniform(0, 1))
+            # 타원 분포 (rx, ry 다름) + 가우시안 jitter
+            lx = rad * c['rx'] * np.cos(theta)
+            ly = rad * c['ry'] * np.sin(theta)
+            # 회전
+            x = c['cx'] + (cr * lx - sr * ly) + rng.normal(0, 0.06)
+            y = c['cy'] + (sr * lx + cr * ly) + rng.normal(0, 0.06)
+            pts.append((x, y))
+        all_pos[c['role']] = pts
+
+    # === 2b) Outlier / 비클러스터 노드 ===
+    # 클러스터 외곽이나 빈 공간에 흩어져 있는 floating 노드들 (realistic)
+    outlier_pos = {'user': [], 'review': [], 'product': []}
+    n_user_out = 60
+    n_review_out = 75
+    n_prod_out = 7
+    for _ in range(n_user_out):
+        outlier_pos['user'].append((rng.uniform(-5.7, 6.2), rng.uniform(-3.1, 3.0)))
+    for _ in range(n_review_out):
+        outlier_pos['review'].append((rng.uniform(-5.7, 6.2), rng.uniform(-3.1, 3.0)))
+    for _ in range(n_prod_out):
+        outlier_pos['product'].append((rng.uniform(3.6, 6.0), rng.uniform(-1.6, 1.7)))
+
+    # === 3) Intra-cluster 엣지 (kNN — 각 노드당 가까운 이웃 3~5개) ===
+    def add_intra_edges(pts, color, k=4, width=0.4, max_edges=None):
+        if len(pts) < 2:
+            return
+        arr = np.array(pts)
+        edges_x, edges_y = [], []
+        count = 0
+        for i in range(len(arr)):
+            # 거리 계산
+            d = np.sum((arr - arr[i]) ** 2, axis=1)
+            d[i] = np.inf
+            nbrs = np.argsort(d)[:k]
+            for j in nbrs:
+                if j <= i:
+                    continue
+                edges_x.extend([arr[i, 0], arr[j, 0], None])
+                edges_y.extend([arr[i, 1], arr[j, 1], None])
+                count += 1
+                if max_edges is not None and count >= max_edges:
+                    break
+            if max_edges is not None and count >= max_edges:
+                break
+        fig.add_trace(go.Scatter(x=edges_x, y=edges_y, mode='lines',
+                                line=dict(color=color, width=width),
+                                hoverinfo='skip', showlegend=False))
+
+    # 각 클러스터 내부 intra edge — 클러스터의 dominant signature 색 + 종류별 width
+    for c in clusters:
+        pts = all_pos[c['role']]
+        k = 5 if c['role'] in ('user_abuse', 'review_promoter') else 4
+        w = CUSTOM_W if c['edge_kind'] == 'custom' else BASE_W
+        add_intra_edges(pts, c['edge'], k=k, width=w)
+
+    # === 4) Inter-cluster 엣지 (의미있는 메시지패싱) — 6 edge type 모두 distinct color ===
+    def add_inter_edges(role_a, role_b, color, n_edges, width=0.4):
+        a = all_pos[role_a]; b = all_pos[role_b]
+        if not a or not b:
+            return
+        ex, ey = [], []
+        for _ in range(min(n_edges, len(a) * len(b))):
+            i = rng.integers(0, len(a))
+            j = rng.integers(0, len(b))
+            ex.extend([a[i][0], b[j][0], None])
+            ey.extend([a[i][1], b[j][1], None])
+        fig.add_trace(go.Scatter(x=ex, y=ey, mode='lines',
+                                line=dict(color=color, width=width),
+                                hoverinfo='skip', showlegend=False))
+
+    # ┌─────────────────────────────────────────────────────────────┐
+    # │  기본 골격 (BASE) : 얇고 muted — backbone 느낌                │
+    # └─────────────────────────────────────────────────────────────┘
+    c_writes = EDGE_COLORS['writes'].format(a=0.25)
+    add_inter_edges('user_normal', 'review_normal', c_writes, 110, width=BASE_W)
+    add_inter_edges('user_other', 'review_normal', c_writes, 70, width=BASE_W)
+    add_inter_edges('user_other', 'review_text_ext', c_writes, 25, width=BASE_W)
+    if abuse_user_n > 5:
+        n_w = int(80 + 110 * day_factor)
+        add_inter_edges('user_abuse', 'review_promoter', c_writes, n_w, width=BASE_W)
+
+    c_targets = EDGE_COLORS['targets'].format(a=0.30)
+    add_inter_edges('review_normal', 'product', c_targets, 80, width=BASE_W)
+    add_inter_edges('review_text_ext', 'product', c_targets, 25, width=BASE_W)
+    if day >= 30:
+        n_t = int(60 + 90 * day_factor)
+        add_inter_edges('review_promoter', 'product', c_targets, n_t, width=BASE_W)
+    add_inter_edges('review_terrorist', 'product', c_targets, 25, width=BASE_W)
+
+    # ┌─────────────────────────────────────────────────────────────┐
+    # │  커스텀 시그니처 (CUSTOM) : 두껍고 vivid — 눈에 띄게         │
+    # └─────────────────────────────────────────────────────────────┘
+    # --- rating_extreme_promoter (custom #1) : review-review 빨강 ---
+    if day >= 45:
+        ra = all_pos['review_promoter']
+        if len(ra) >= 2:
+            ex, ey = [], []
+            n_pp = int(60 + 80 * day_factor)
+            for _ in range(n_pp):
+                i, j = rng.integers(0, len(ra), 2)
+                if i == j: continue
+                ex.extend([ra[i][0], ra[j][0], None])
+                ey.extend([ra[i][1], ra[j][1], None])
+            fig.add_trace(go.Scatter(x=ex, y=ey, mode='lines',
+                                    line=dict(color=EDGE_COLORS['rating_extreme_promoter'].format(a=0.55),
+                                             width=CUSTOM_W),
+                                    hoverinfo='skip', showlegend=False))
+
+    # --- rating_extreme_terrorist (custom #2) : review-review 노랑 ---
+    rt = all_pos['review_terrorist']
+    if len(rt) >= 2:
+        ex, ey = [], []
+        for _ in range(50):
+            i, j = rng.integers(0, len(rt), 2)
+            if i == j: continue
+            ex.extend([rt[i][0], rt[j][0], None])
+            ey.extend([rt[i][1], rt[j][1], None])
+        fig.add_trace(go.Scatter(x=ex, y=ey, mode='lines',
+                                line=dict(color=EDGE_COLORS['rating_extreme_terrorist'].format(a=0.70),
+                                         width=CUSTOM_W),
+                                hoverinfo='skip', showlegend=False))
+
+    # --- text_extreme (custom #3) : review-review 보라 ---
+    rte = all_pos['review_text_ext']
+    if len(rte) >= 2:
+        ex, ey = [], []
+        for _ in range(55):
+            i, j = rng.integers(0, len(rte), 2)
+            if i == j: continue
+            ex.extend([rte[i][0], rte[j][0], None])
+            ey.extend([rte[i][1], rte[j][1], None])
+        fig.add_trace(go.Scatter(x=ex, y=ey, mode='lines',
+                                line=dict(color=EDGE_COLORS['text_extreme'].format(a=0.70),
+                                         width=CUSTOM_W),
+                                hoverinfo='skip', showlegend=False))
+
+    # --- user_co_burst (custom #4) : user-user 핫핑크 (Day 60+) ---
+    if day >= 60:
+        ua = all_pos['user_abuse']
+        if len(ua) >= 3:
+            ex, ey = [], []
+            n_cb = int(80 + 100 * day_factor)
+            for _ in range(n_cb):
+                i, j = rng.integers(0, len(ua), 2)
+                if i == j: continue
+                ex.extend([ua[i][0], ua[j][0], None])
+                ey.extend([ua[i][1], ua[j][1], None])
+            fig.add_trace(go.Scatter(x=ex, y=ey, mode='lines',
+                                    line=dict(color=EDGE_COLORS['user_co_burst'].format(a=0.60),
+                                             width=CUSTOM_W),
+                                    hoverinfo='skip', showlegend=False))
+
+    # --- Outlier 노드 → 간헐적 sparse 연결 (base writes, 얇게) ---
+    for ux, uy in outlier_pos['user'][:30]:
+        if rng.random() < 0.55:
+            tgt_pool = all_pos['review_normal'] + all_pos['review_text_ext']
+            tx, ty = tgt_pool[rng.integers(0, len(tgt_pool))]
+            fig.add_trace(go.Scatter(x=[ux, tx], y=[uy, ty], mode='lines',
+                                    line=dict(color=c_writes, width=BASE_W),
+                                    hoverinfo='skip', showlegend=False))
+
+    # === 5) Outlier 노드 그리기 (먼저, 가장 옅게) ===
+    if outlier_pos['user']:
+        xs, ys = zip(*outlier_pos['user'])
+        fig.add_trace(go.Scatter(
+            x=list(xs), y=list(ys), mode='markers',
+            marker=dict(size=4, color='#5C6478',
+                       line=dict(color='rgba(255,255,255,0.1)', width=0.3),
+                       opacity=0.55),
+            name=f'고립 사용자 outlier ({len(xs)})',
+            hovertext=[f'isolated user #{i} (저활동/신규)' for i in range(len(xs))],
+            hoverinfo='text',
+        ))
+    if outlier_pos['review']:
+        xs, ys = zip(*outlier_pos['review'])
+        fig.add_trace(go.Scatter(
+            x=list(xs), y=list(ys), mode='markers',
+            marker=dict(size=4, color='#8B96AB', symbol='diamond',
+                       line=dict(color='rgba(255,255,255,0.1)', width=0.3),
+                       opacity=0.55),
+            name=f'단발 리뷰 outlier ({len(xs)})',
+            hovertext=[f'isolated review #{i}' for i in range(len(xs))],
+            hoverinfo='text',
+        ))
+    if outlier_pos['product']:
+        xs, ys = zip(*outlier_pos['product'])
+        fig.add_trace(go.Scatter(
+            x=list(xs), y=list(ys), mode='markers',
+            marker=dict(size=8, color='#C19660', symbol='square',
+                       line=dict(color='rgba(255,255,255,0.25)', width=0.6),
+                       opacity=0.7),
+            name=f'인접 카테고리 식당 ({len(xs)})',
+            hoverinfo='skip',
+        ))
+
+    # === 6) 노드 그리기 (각 클러스터별) ===
+    for c in clusters:
+        pts = all_pos[c['role']]
+        if not pts:
+            continue
+        xs, ys = zip(*pts)
+        is_abuse = c['role'] in ('user_abuse', 'review_promoter')
+        is_product = c['role'] == 'product'
+        marker_kw = dict(
+            size=c['size'] + (2 if is_abuse else 0),
+            color=c['color'],
+            line=dict(color='rgba(255,255,255,0.6)' if is_abuse or is_product else 'rgba(255,255,255,0.18)',
+                     width=1.2 if is_abuse or is_product else 0.5),
+            opacity=0.95 if is_abuse else 0.85,
+        )
+        fig.add_trace(go.Scatter(
+            x=list(xs), y=list(ys), mode='markers',
+            marker=marker_kw,
+            name=f'{c["name"]} ({len(pts)})',
+            hovertext=[f'{c["name"]} #{i}' for i in range(len(pts))],
+            hoverinfo='text',
+        ))
+
+    # === 7) 어뷰징 클러스터 강조 — 점선 타원 + 라벨 ===
+    if day >= 30:
+        theta = np.linspace(0, 2 * np.pi, 80)
+        for cluster_role in ('user_abuse', 'review_promoter'):
+            c = next(c for c in clusters if c['role'] == cluster_role)
+            cx, cy, rx, ry = c['cx'], c['cy'], c['rx'] * 1.18, c['ry'] * 1.22
+            fig.add_trace(go.Scatter(
+                x=cx + rx * np.cos(theta), y=cy + ry * np.sin(theta),
+                mode='lines',
+                line=dict(color='rgba(255,59,48,0.55)', width=1.5, dash='dash'),
+                hoverinfo='skip', showlegend=False))
+
+        fig.add_annotation(x=-3.8, y=-3.05, text='<b>🚨 Workshop B (co_burst)</b>',
+                          showarrow=False, font=dict(color='#FF3B30', size=10, family='Inter'),
+                          bgcolor='rgba(255,59,48,0.15)', bordercolor='#FF3B30',
+                          borderwidth=1, borderpad=4)
+        fig.add_annotation(x=-0.4, y=-3.15, text='<b>Promoter 리뷰 군집</b>',
+                          showarrow=False, font=dict(color='#FF3B30', size=10, family='Inter'),
+                          bgcolor='rgba(255,59,48,0.12)', bordercolor='#FF3B30',
+                          borderwidth=1, borderpad=4)
+
+    # === 8) Day 75+ 단일 추론 박스 (Day 85 미만일 때만, 그 이후엔 dual-brand 강조로 대체) ===
+    if 75 <= day < 85:
+        ts_key = day if day in MILESTONES else 75
+        fig.add_annotation(x=5.7, y=2.7,
+                          text=f'<b style="color:#FF3B30;">HeteroSAGE 추론 중...</b><br>'
+                               f'대상: <b>{abuse_b["name"]}</b><br>'
+                               f'Trust Score: <b>{abuse_b["trust_series"][ts_key]}</b>/100<br>'
+                               f'시그니처 3개 임계 초과',
+                          showarrow=False, align='left',
+                          font=dict(color='#FFFFFF', size=10, family='Inter'),
+                          bgcolor='rgba(255,59,48,0.20)',
+                          bordercolor='#FF3B30', borderwidth=1, borderpad=8)
+
+    # === 8b) Day 85+ : 어뷰징 확정 2개 브랜드 — 그래프 위에 한눈에 강조 ===
+    if day >= 85:
+        abuse_brands = [b for b in brands if b['tier'] == 'abuse_confirmed'][:2]
+        # 브랜드를 product hub 근처에 prominent 하게 배치
+        # 하나는 위쪽 (review 군집 가까이), 하나는 아래쪽 (어뷰징 user 군집과 연결)
+        brand_anchors = [
+            dict(x=4.6, y=1.05, label_x=5.95, label_y=1.55, label_anchor='left'),
+            dict(x=5.25, y=-0.25, label_x=5.95, label_y=-0.75, label_anchor='left'),
+        ]
+
+        # 먼저 evidence trail 엣지 (브랜드 → user_abuse / review_promoter)
+        ua = all_pos['user_abuse']
+        rp = all_pos['review_promoter']
+        for anchor, brand in zip(brand_anchors, abuse_brands):
+            bx, by = anchor['x'], anchor['y']
+            # co_burst evidence : 브랜드 → Workshop B 사용자 (소수 sample, 핫핑크 점선)
+            if len(ua) > 0:
+                for _ in range(7):
+                    i = rng.integers(0, len(ua))
+                    fig.add_trace(go.Scatter(
+                        x=[bx, ua[i][0]], y=[by, ua[i][1]], mode='lines',
+                        line=dict(color='rgba(255,60,170,0.55)', width=1.4, dash='dot'),
+                        hoverinfo='skip', showlegend=False))
+            # promoter evidence : 브랜드 → Promoter 리뷰 (빨강 점선)
+            if len(rp) > 0:
+                for _ in range(10):
+                    i = rng.integers(0, len(rp))
+                    fig.add_trace(go.Scatter(
+                        x=[bx, rp[i][0]], y=[by, rp[i][1]], mode='lines',
+                        line=dict(color='rgba(255,59,48,0.55)', width=1.5, dash='dot'),
+                        hoverinfo='skip', showlegend=False))
+
+        # 브랜드 마커 + 라벨 (위에 덮어 그리기 — 가장 prominent)
+        for anchor, brand in zip(brand_anchors, abuse_brands):
+            bx, by = anchor['x'], anchor['y']
+            # 외곽 glow ring (3겹)
+            for ring_size, ring_alpha in [(70, 0.10), (54, 0.16), (40, 0.28)]:
+                fig.add_trace(go.Scatter(
+                    x=[bx], y=[by], mode='markers',
+                    marker=dict(size=ring_size, color=f'rgba(255,59,48,{ring_alpha})',
+                               symbol='circle', line=dict(width=0)),
+                    hoverinfo='skip', showlegend=False))
+            # 중심 별 마커
+            fig.add_trace(go.Scatter(
+                x=[bx], y=[by], mode='markers',
+                marker=dict(size=30, color='#FF3B30', symbol='star',
+                           line=dict(color='#FFFFFF', width=2.8)),
+                hovertext=f"⛔ {brand['name']} ({brand['category']})<br>"
+                          f"Trust {brand['final_trust']}/100 — 어뷰징 확정",
+                hoverinfo='text',
+                name=f"⛔ {brand['name']}",
+                showlegend=True))
+
+            # 브랜드 라벨 박스 + leader line
+            lx, ly = anchor['label_x'], anchor['label_y']
+            fig.add_annotation(
+                x=lx, y=ly,
+                ax=bx, ay=by, axref='x', ayref='y',
+                text=f'<b style="color:#FF3B30;font-size:11px;">⛔ {brand["name"]}</b><br>'
+                     f'<span style="color:#C8D0DE;font-size:9px;">{brand["category"]} · 경희대</span><br>'
+                     f'<span style="color:#FF3B30;font-size:10px;">Trust <b>{brand["final_trust"]}</b>/100</span>',
+                showarrow=True, arrowhead=2, arrowsize=1.2, arrowwidth=1.5,
+                arrowcolor='#FF3B30',
+                align='left',
+                font=dict(color='#FFFFFF', size=9, family='Inter'),
+                bgcolor='rgba(15,19,32,0.96)', bordercolor='#FF3B30',
+                borderwidth=2, borderpad=6,
+                xanchor=anchor['label_anchor'], yanchor='middle')
+
+        # 상단 callout — "Day 90 최종 판별"
+        fig.add_annotation(
+            x=0.5, y=1.0, xref='paper', yref='paper',
+            text=f'<b style="color:#FF3B30;font-size:13px;">🚨 Day {day} 최종 판별: 어뷰징 확정 2개 식당</b> '
+                 f'<span style="color:#C8D0DE;font-size:10px;">'
+                 f'— {abuse_brands[0]["name"]} · {abuse_brands[1]["name"]}'
+                 f'</span>',
+            showarrow=False, align='center',
+            font=dict(color='#FFFFFF', size=12, family='Inter'),
+            bgcolor='rgba(255,59,48,0.22)', bordercolor='#FF3B30',
+            borderwidth=2, borderpad=8,
+            xanchor='center', yanchor='top')
+
+    # === 9) 엣지 타입 범례 (좌상단) — base 그룹 vs custom 그룹 시각 분리 ===
+    legend_text = (
+        '<b>엣지 타입 (실측 50K)</b><br>'
+        '<span style="color:#9AA9C8;">━</span> '
+        '<span style="color:#9AA9C8;font-size:8px;">기본골격</span> '
+        '<span style="color:#AABAD8;">writes</span> (50,000)<br>'
+        '<span style="color:#9AA9C8;">━</span> '
+        '<span style="color:#9AA9C8;font-size:8px;">기본골격</span> '
+        '<span style="color:#78AADC;">targets</span> (50,000)<br>'
+        '<span style="color:#8B96AB;">────────────</span><br>'
+        '<span style="color:#FF3B30;font-weight:900;">━━</span> '
+        '<span style="color:#FF8A80;font-size:8px;">커스텀</span> '
+        '<span style="color:#FF3B30;">rating_extreme_promoter</span> (3,332)<br>'
+        '<span style="color:#FFC800;font-weight:900;">━━</span> '
+        '<span style="color:#FFD955;font-size:8px;">커스텀</span> '
+        '<span style="color:#FFC800;">rating_extreme_terrorist</span> (334)<br>'
+        '<span style="color:#D26EFF;font-weight:900;">━━</span> '
+        '<span style="color:#E6A8FF;font-size:8px;">커스텀</span> '
+        '<span style="color:#D26EFF;">text_extreme</span> (351)<br>'
+        '<span style="color:#FF3CAA;font-weight:900;">━━</span> '
+        '<span style="color:#FF8AD0;font-size:8px;">커스텀</span> '
+        '<span style="color:#FF3CAA;">user_co_burst</span> (70,532)'
+    )
+    fig.add_annotation(x=-5.6, y=3.1, text=legend_text,
+                      showarrow=False, align='left',
+                      font=dict(color='#FFFFFF', size=9, family='Inter'),
+                      bgcolor='rgba(15,19,32,0.88)', bordercolor='#FF3B30',
+                      borderwidth=1, borderpad=7, xanchor='left', yanchor='top')
+
+    # === 10) 통계 박스 (하단) ===
+    total_cluster = sum(len(all_pos[c['role']]) for c in clusters)
+    total_out = len(outlier_pos['user']) + len(outlier_pos['review']) + len(outlier_pos['product'])
+    user_total = (len(all_pos['user_normal']) + len(all_pos['user_abuse']) +
+                  len(all_pos['user_other']) + len(outlier_pos['user']))
+    review_total = (len(all_pos['review_normal']) + len(all_pos['review_promoter']) +
+                    len(all_pos['review_terrorist']) + len(all_pos['review_text_ext']) +
+                    len(outlier_pos['review']))
+    prod_total = len(all_pos['product']) + len(outlier_pos['product'])
+    fig.add_annotation(x=0.5, y=-0.02,
+                      text=f'<b>그래프 (Day {day} 부분 샘플)</b>: '
+                           f'총 노드 {total_cluster + total_out} '
+                           f'(사용자 {user_total} · 리뷰 {review_total} · 식당 {prod_total}, '
+                           f'그중 outlier {total_out})   ·   '
+                           f'실 50K: user 37,481 / review 50,000 / product 200',
+                      showarrow=False, font=dict(color='#8B96AB', size=9),
+                      xref='paper', yref='paper',
+                      bgcolor='rgba(19,24,41,0.7)', borderpad=4)
+
     fig.update_layout(
-        plot_bgcolor='#131829', paper_bgcolor='#131829',
-        font=dict(family='Inter', color='#FFFFFF', size=8),
-        height=140, margin=dict(l=28, r=10, t=22, b=14),
-        legend=dict(orientation='h', y=-0.22, x=0.5, xanchor='center',
-                   font=dict(color='#FFFFFF', size=8), bgcolor='rgba(0,0,0,0)'),
+        plot_bgcolor='#0F1320', paper_bgcolor='#0F1320',
+        font=dict(family='Inter', color='#FFFFFF', size=10),
+        height=400, margin=dict(l=10, r=10, t=40, b=20),
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False,
+                  range=[-6.0, 6.4]),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False,
+                  range=[-3.4, 3.4]),
+        legend=dict(orientation='h', y=1.08, x=0.5, xanchor='center',
+                   font=dict(color='#FFFFFF', size=9), bgcolor='rgba(0,0,0,0)',
+                   itemsizing='constant'),
+        title=dict(text=f'<b>🧠 HeteroSAGE 임베딩 공간 — Community Cluster View (Day {day})</b>',
+                  font=dict(color='#FFFFFF', size=12, family='Inter'),
+                  x=0.5, xanchor='center', y=0.99),
         hoverlabel=dict(bgcolor='#1C2235', font=dict(color='#FFFFFF')),
     )
-    fig.update_xaxes(gridcolor='#1C2235', tickfont=dict(color='#8B96AB', size=8))
-    fig.update_yaxes(gridcolor='#1C2235', tickfont=dict(color='#8B96AB', size=8))
-    for ann in fig['layout']['annotations'][:3]:
-        ann['font'] = dict(color='#FFFFFF', size=10, family='Inter')
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 
